@@ -1,0 +1,35 @@
+#DOCUMENTAION#
+
+#########################COMMANDS TO EXECUTE PLAYBOOK#########################
+ansible-playbook -i /home/ubuntu/ansible-playbooks/  install_mongodb.yml
+##########################UI################################
+####install_ansible##############
+sudo apt-get update
+sudo apt-get install software-properties-common
+sudo apt-add-repository ppa:ansible/ansible
+sudo apt-get update
+sudo apt-get install ansible
+######################
+sudo snap install semaphore
+sudo snap services semaphore
+sudo semaphore user list
+sudo semaphore user add --admin --login inferyx --name Denis --email inferyx --password 123456
+sudo snap start semaphore
+##CONFIG FILE#####
+/root/snap/semaphore/common/ansible.cfg
+
+#################FOR SEMAFORE WE NEED###########################
+What we need
+1. Define an Inventory
+2. Secure Authentication
+3. Create Playbooks
+4. Git (GitHub or GitLab)
+5.SetUp Environment
+
+
+#####################################################################
+
+
+ansible-playbook -i /home/ubuntu/ansible-playbooks/  install_mongodb.yml
+
+

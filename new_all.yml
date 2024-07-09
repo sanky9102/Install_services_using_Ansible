@@ -1,0 +1,310 @@
+- hosts: servers
+  become: yes
+  become_method: sudo
+  become_user: root
+
+  vars:
+    tomcat_version: "9.0.8"
+    tomcat_install_dir: "/opt/tomcat"
+    mysql_version: "8.0"
+    mongo_version: "3.4.7"
+    neo4j_version: "4.3.6"
+    camunda_version: "7.16.0"
+    python_version: "3.9.7"
+    java8_version: "8"
+    java11_version: "11"
+    java17_version: "17"
+    mongodb_version: "3.4.7"
+    mongodb_dir: "/home/inferyx/mongodb"
+    mongodb_port: 27017
+    neo4j_java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
+
+  tasks:
+    - name: Update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install dependencies
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - software-properties-common
+        - gnupg
+
+    - name: Install Java 8
+      apt:
+        name: openjdk-8-jdk
+        state: present
+
+    - name: Install Java 11
+      apt:
+        name: openjdk-11-jdk
+        state: present
+
+    - name: Install Java 17
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Create directory for MongoDB installation
+      ansible.builtin.file:
+        path: "{{ mongodb_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Check if MongoDB archive exists
+      ansible.builtin.stat:
+        path: "{{ mongodb_dir }}/mongodb-linux-x86_64-{{ mongodb_version }}.tgz"
+      register: mongodb_archive
+
+    - name: Download MongoDB archive with curl
+      ansible.builtin.command:
+        cmd: "curl -L -o {{ mongodb_dir }}/mongodb-linux-x86_64-{{ mongodb_version }}.tgz https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-{{ mongodb_version }}.tgz"
+      when: not mongodb_archive.stat.exists
+
+    - name: Extract MongoDB archive
+      ansible.builtin.command:
+        cmd: "tar -xvf {{ mongodb_dir }}/mongodb-linux-x86_64-{{ mongodb_version }}.tgz --directory {{ mongodb_dir }} --strip-components=1"
+      args:
+        creates: "{{ mongodb_dir }}/bin/mongod"
+
+    - name: Ensure MongoDB binaries are executable
+      ansible.builtin.file:
+        path: "{{ mongodb_dir }}/bin/mongod"
+        mode: '0755'
+
+    - name: Set MongoDB configuration parameters
+      ansible.builtin.copy:
+        content: |
+          # mongod.conf
+          # for documentation of all options, see:
+          #   http://docs.mongodb.org/manual/reference/configuration-options/
+
+          # Where and how to store data.
+          storage:
+            dbPath: {{ mongodb_dir }}
+            journal:
+              enabled: true
+          # where to write logging data.
+          systemLog:
+            destination: file
+            logAppend: true
+            path: {{ mongodb_dir }}/mongod.log
+          # network interfaces
+          net:
+            port: {{ mongodb_port }}
+            bindIp: 127.0.0.1
+        dest: /etc/mongod.conf
+
+    - name: Create systemd service file for MongoDB
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=MongoDB Database Service
+          After=network.target
+
+          [Service]
+          User=root
+          ExecStart={{ mongodb_dir }}/bin/mongod --config /etc/mongod.conf
+          ExecReload=/bin/kill -HUP $MAINPID
+          Restart=on-failure
+          LimitNOFILE=64000
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/mongodb.service
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      ansible.builtin.command:
+        cmd: systemctl daemon-reload
+
+    - name: Start MongoDB service
+      ansible.builtin.service:
+        name: mongodb
+        state: started
+        enabled: yes
+
+    - name: Create symbolic link for MongoDB binaries
+      ansible.builtin.file:
+        src: "{{ mongodb_dir }}/bin/mongo"
+        dest: "/usr/local/bin/mongo"
+        state: link
+
+    - name: Verify MongoDB client installation
+      ansible.builtin.command:
+        cmd: mongo --version
+      register: mongo_version
+
+    - name: Print MongoDB client version
+      ansible.builtin.debug:
+        msg: "MongoDB client version: {{ mongo_version.stdout }}"
+
+    - name: Install Tomcat dependencies
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - curl
+        - tar
+
+    - name: Install curl
+      apt:
+        name: curl
+        state: present
+
+    - name: Download Tomcat using curl
+      command: curl -L -o /tmp/apache-tomcat-{{ tomcat_version }}.tar.gz https://archive.apache.org/dist/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz
+
+    - name: Create Tomcat installation directory
+      ansible.builtin.file:
+        path: "{{ tomcat_install_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract Tomcat
+      ansible.builtin.unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "{{ tomcat_install_dir }}"
+        remote_src: yes
+        creates: "{{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+
+    - name: Set permissions on Tomcat installation directory
+      ansible.builtin.command:
+        cmd: chown -R tomcat:tomcat {{ tomcat_install_dir }}
+
+    - name: Create systemd service file for Tomcat
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Apache Tomcat
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=tomcat
+          Group=tomcat
+          Environment="JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
+          Environment="CATALINA_PID={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/temp/tomcat.pid"
+          Environment="CATALINA_HOME={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+          Environment="CATALINA_BASE={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}"
+          ExecStart={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/bin/startup.sh
+          ExecStop={{ tomcat_install_dir }}/apache-tomcat-{{ tomcat_version }}/bin/shutdown.sh
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/tomcat.service
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      ansible.builtin.command:
+        cmd: systemctl daemon-reload
+
+    - name: Start and enable Tomcat service
+      ansible.builtin.service:
+        name: tomcat
+        state: started
+        enabled: yes
+
+    - name: Install MySQL
+      apt:
+        name: mysql-server
+        state: present
+
+    - name: Start and enable MySQL
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Install curl
+      apt:
+        name: curl
+        state: present
+
+    - name: Download Neo4j repository key using curl
+      command: curl -L -o /tmp/neotechnology.gpg.key https://debian.neo4j.com/neotechnology.gpg.key
+
+    - name: Add Neo4j repository key
+      ansible.builtin.apt_key:
+        file: /tmp/neotechnology.gpg.key
+        state: present
+
+    - name: Add Neo4j repository
+      ansible.builtin.apt_repository:
+        repo: "deb https://debian.neo4j.com stable 4.3"
+        state: present
+        update_cache: yes
+
+    - name: Install Neo4j
+      apt:
+        name: neo4j
+        state: present
+
+    - name: Configure Neo4j to use the correct Java version
+      lineinfile:
+        path: /etc/environment
+        line: "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
+        state: present
+
+    - name: Reload systemd daemon
+      ansible.builtin.command:
+        cmd: systemctl daemon-reload
+
+    - name: Start and enable Neo4j
+      ansible.builtin.service:
+        name: neo4j
+        state: started
+        enabled: yes
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Start and enable Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Configure Nginx
+      copy:
+        content: |
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+
+              root /var/www/html;
+              index index.html index.htm index.nginx-debian.html;
+
+              server_name _;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+
+              location /tomcat/ {
+                  proxy_pass http://127.0.0.1:8080/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+      notify:
+        - Reload Nginx
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
